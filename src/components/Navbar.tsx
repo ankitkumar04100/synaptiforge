@@ -3,6 +3,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { LiveStatusDot } from '@/components/LiveStatusDot';
 import { LayoutDashboard, Code2, Brain, Zap, FileCode, Settings, LogOut, User } from 'lucide-react';
 import { motion } from 'framer-motion';
+import logo from '@/assets/synaptiforge-logo.png';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -30,9 +31,7 @@ export function Navbar() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between h-14">
         <div className="flex items-center gap-6">
           <Link to="/" className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg sf-primary-grad flex items-center justify-center">
-              <Brain className="w-4 h-4 text-primary-foreground" />
-            </div>
+            <img src={logo} alt="Synaptiforge" width={28} height={28} className="rounded-lg" />
             <span className="font-display font-bold text-foreground text-base hidden sm:inline">Synaptiforge</span>
           </Link>
           <div className="hidden md:flex items-center gap-1">

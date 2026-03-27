@@ -6,9 +6,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAppStore } from "@/store/useAppStore";
 import { hydrateStore } from "@/db/hydrate";
 import { Navbar } from "@/components/Navbar";
+import { connectEvents } from "@/api/edge";
 import { useEffect } from "react";
 import { lazy, Suspense } from "react";
 
+const LandingPage = lazy(() => import("./pages/LandingPage"));
 const AuthPage = lazy(() => import("./pages/AuthPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const EditorPage = lazy(() => import("./pages/EditorPage"));
@@ -27,12 +29,18 @@ function AppContent() {
     hydrateStore();
   }, []);
 
-  // Simulate SSE connection
+  // Real SSE connection
   useEffect(() => {
     if (!isAuthenticated) return;
-    setSseConnected(true);
-    const interval = setInterval(() => setSseConnected(true), 15000);
-    return () => { clearInterval(interval); setSseConnected(false); };
+    const disconnect = connectEvents(
+      (type) => {
+        // Could refresh data on suggestion/patch events
+        console.log('SSE event:', type);
+      },
+      () => setSseConnected(true),
+      () => setSseConnected(false),
+    );
+    return disconnect;
   }, [isAuthenticated, setSseConnected]);
 
   if (!hydrated) {
@@ -48,8 +56,9 @@ function AppContent() {
       <Navbar />
       <Suspense fallback={<div className="flex items-center justify-center min-h-[60vh] text-muted-foreground text-sm">Loading...</div>}>
         <Routes>
+          <Route path="/landing" element={isAuthenticated ? <Navigate to="/" /> : <LandingPage />} />
           <Route path="/auth" element={isAuthenticated ? <Navigate to="/" /> : <AuthPage />} />
-          <Route path="/" element={isAuthenticated ? <DashboardPage /> : <Navigate to="/auth" />} />
+          <Route path="/" element={isAuthenticated ? <DashboardPage /> : <Navigate to="/landing" />} />
           <Route path="/editor" element={isAuthenticated ? <EditorPage /> : <Navigate to="/auth" />} />
           <Route path="/signature" element={isAuthenticated ? <SignaturePage /> : <Navigate to="/auth" />} />
           <Route path="/reflexes" element={isAuthenticated ? <ReflexesPage /> : <Navigate to="/auth" />} />

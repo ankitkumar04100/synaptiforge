@@ -2,10 +2,10 @@ import { useAppStore } from '@/store/useAppStore';
 import { db } from '@/db/dexie';
 import { clearAllData, exportData, importData } from '@/db/hydrate';
 import { redactSecrets } from '@/lib/engine';
+import { redactText } from '@/api/edge';
 import { motion } from 'framer-motion';
 import { Settings, Shield, Database, Info, Download, Upload, Trash2, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { useState } from 'react';
 import { toast } from 'sonner';
@@ -17,6 +17,7 @@ export default function SettingsPage() {
   const [telemetry, setTelemetry] = useState(false);
   const [redactInput, setRedactInput] = useState('');
   const [redactOutput, setRedactOutput] = useState('');
+  const [redactLoading, setRedactLoading] = useState(false);
 
   const handleExport = async () => {
     const data = await exportData();
@@ -56,8 +57,18 @@ export default function SettingsPage() {
     toast.success('All data cleared');
   };
 
-  const handleRedact = () => {
-    setRedactOutput(redactSecrets(redactInput));
+  const handleRedact = async () => {
+    if (!redactInput.trim()) return;
+    setRedactLoading(true);
+    try {
+      const result = await redactText(redactInput);
+      setRedactOutput(result.masked);
+    } catch {
+      // Fallback to local redaction
+      setRedactOutput(redactSecrets(redactInput));
+    } finally {
+      setRedactLoading(false);
+    }
   };
 
   return (
@@ -91,9 +102,7 @@ export default function SettingsPage() {
         <h2 className="font-display font-semibold text-foreground mb-3 flex items-center gap-2">
           <Shield className="w-4 h-4 text-success" /> Privacy
         </h2>
-
         <div className="space-y-4">
-          {/* Redaction tester */}
           <div>
             <label className="text-xs font-medium text-foreground mb-1 block flex items-center gap-1">
               <Eye className="w-3 h-3" /> Redaction Tester
@@ -104,13 +113,14 @@ export default function SettingsPage() {
               placeholder="Paste text with secrets like sk-abc123... or ghp_xyz..."
               className="w-full h-20 text-xs font-mono p-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring/30 resize-none"
             />
-            <Button variant="outline" size="sm" className="rounded-xl text-xs mt-1" onClick={handleRedact}>Test Redaction</Button>
+            <Button variant="outline" size="sm" className="rounded-xl text-xs mt-1" onClick={handleRedact} disabled={redactLoading}>
+              {redactLoading ? 'Testing...' : 'Test Redaction'}
+            </Button>
             {redactOutput && (
               <div className="mt-2 text-xs font-mono p-2 rounded-lg bg-surface border border-border text-muted-foreground">{redactOutput}</div>
             )}
           </div>
 
-          {/* Telemetry */}
           <div className="flex items-center justify-between">
             <div>
               <div className="text-sm font-medium text-foreground">Telemetry</div>
@@ -121,7 +131,6 @@ export default function SettingsPage() {
 
           <p className="text-xs text-muted-foreground italic">Minimal context sent to models; secrets masked; telemetry off by default.</p>
 
-          {/* Clear all */}
           <Button variant="outline" size="sm" className="rounded-xl text-xs gap-1 text-destructive border-destructive/30 hover:bg-destructive/5" onClick={handleClearAll}>
             <Trash2 className="w-3 h-3" /> Clear All Data
           </Button>
