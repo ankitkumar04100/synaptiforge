@@ -37,7 +37,6 @@
 - [🗺️ Roadmap](#-roadmap)
 - [⚠️ Limitations](#-limitations)
 - [🤝 Contributing](#-contributing)
-- [📜 License](#-license)
 - [❓ FAQ](#-faq)
 - [🎨 Assets](#-assets)
 ---
@@ -752,12 +751,6 @@ We welcome contributions!
 5. Submit a PR with:
    - Clear description  
    - Demo clips  
-
----
-
-## 📄 License
-
-**MIT © 2026 Synaptiforge Contributors**
 
 ---
 
