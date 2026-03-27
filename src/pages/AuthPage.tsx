@@ -1,8 +1,9 @@
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { motion } from 'framer-motion';
-import { Brain, Github, User } from 'lucide-react';
+import { Github, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import logo from '@/assets/synaptiforge-logo.png';
 
 export default function AuthPage() {
   const navigate = useNavigate();
@@ -23,9 +24,7 @@ export default function AuthPage() {
         transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
         className="sf-card sf-elevated p-8 sm:p-10 max-w-md w-full text-center"
       >
-        <div className="w-16 h-16 rounded-2xl sf-primary-grad mx-auto flex items-center justify-center mb-6">
-          <Brain className="w-8 h-8 text-primary-foreground" />
-        </div>
+        <img src={logo} alt="Synaptiforge" width={64} height={64} className="mx-auto mb-6 rounded-2xl" />
         <h1 className="font-display text-2xl font-bold text-foreground mb-2">Welcome to Synaptiforge</h1>
         <p className="text-muted-foreground text-sm mb-8">
           Your Cognitive Coding Twin — learns your style, predicts your next lines, and generates style-aligned patches.
@@ -34,10 +33,7 @@ export default function AuthPage() {
           <Button
             variant="outline"
             className="h-12 gap-2 text-sm font-medium rounded-xl border-border hover:bg-surface"
-            onClick={() => {
-              // GitHub OAuth would redirect here
-              handleGuest();
-            }}
+            onClick={handleGuest}
           >
             <Github className="w-4 h-4" />
             Sign in with GitHub

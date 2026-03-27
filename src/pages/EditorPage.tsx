@@ -1,8 +1,9 @@
 import { useAppStore } from '@/store/useAppStore';
 import { DiffViewer } from '@/components/DiffViewer';
 import { generateHeuristicSuggestion, applyUnifiedDiff } from '@/lib/engine';
+import { suggestFix, predictStream } from '@/api/edge';
 import { db } from '@/db/dexie';
-import { useState, useCallback, lazy, Suspense } from 'react';
+import { useState, useCallback, useRef, useEffect, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Play, FileCode, Undo2, Redo2, Copy, Check, Wand2, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -31,18 +32,100 @@ export default function EditorPage() {
   const [undoStack, setUndoStack] = useState<string[]>([]);
   const [redoStack, setRedoStack] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
+  const [ghostText, setGhostText] = useState('');
+  const [ghostConfidence, setGhostConfidence] = useState<number | null>(null);
+  const ghostAbortRef = useRef<AbortController | null>(null);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Ghost text prediction
+  useEffect(() => {
+    if (!predictiveEnabled) {
+      setGhostText('');
+      setGhostConfidence(null);
+      return;
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Tab' && ghostText) {
+        e.preventDefault();
+        setEditorContent(editorContent + ghostText);
+        setGhostText('');
+        setGhostConfidence(null);
+        toast.success('Ghost text accepted');
+      }
+      if (e.key === 'Escape' && ghostText) {
+        setGhostText('');
+        setGhostConfidence(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [predictiveEnabled, ghostText, editorContent, setEditorContent]);
+
+  const triggerPrediction = useCallback(() => {
+    if (!predictiveEnabled) return;
+    ghostAbortRef.current?.abort();
+    setGhostText('');
+    setGhostConfidence(null);
+
+    let accumulated = '';
+    const temp = aggressiveness / 100;
+    const ctrl = predictStream(
+      {
+        filePath: editorFilePath,
+        context: editorContent.slice(-500),
+        signatureJson: signature || undefined,
+        temperature: temp,
+        top_p: Math.max(0.1, 1 - temp * 0.5),
+        language: editorLanguage,
+      },
+      (token) => {
+        accumulated += token;
+        setGhostText(accumulated);
+      },
+      (c) => setGhostConfidence(c),
+      () => { /* done */ },
+    );
+    ghostAbortRef.current = ctrl;
+  }, [predictiveEnabled, aggressiveness, editorContent, editorFilePath, editorLanguage, signature]);
+
+  const handleEditorChange = useCallback((v: string | undefined) => {
+    setEditorContent(v ?? '');
+    setGhostText('');
+    setGhostConfidence(null);
+
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    if (predictiveEnabled) {
+      idleTimerRef.current = setTimeout(triggerPrediction, 650);
+    }
+  }, [setEditorContent, predictiveEnabled, triggerPrediction]);
 
   const handleSuggest = useCallback(async (intent: 'fix' | 'patch') => {
     setLoading(true);
     try {
-      // Use local heuristic fallback
-      const res = generateHeuristicSuggestion(editorContent, editorLanguage);
+      const intentText = intent === 'fix'
+        ? 'Suggest minimal changes to improve this code'
+        : 'Generate a complete patch with all improvements';
+
+      const res = await suggestFix({
+        filePath: editorFilePath,
+        context: editorContent,
+        signatureJson: signature || undefined,
+        language: editorLanguage,
+        intent: intentText,
+      });
       setResult(res);
       toast.success(intent === 'fix' ? 'Suggestion ready' : 'Patch generated');
+    } catch (err) {
+      // Fallback to local heuristic
+      const res = generateHeuristicSuggestion(editorContent, editorLanguage);
+      setResult(res);
+      toast.success('Suggestion ready (local heuristic)');
     } finally {
       setLoading(false);
     }
-  }, [editorContent, editorLanguage]);
+  }, [editorContent, editorLanguage, editorFilePath, signature]);
 
   const handleApply = useCallback(() => {
     if (!result) return;
@@ -51,7 +134,6 @@ export default function EditorPage() {
       setUndoStack(prev => [...prev, editorContent]);
       setRedoStack([]);
       setEditorContent(newContent);
-      // Store patch
       const patch = {
         id: `patch-${Date.now()}`,
         filePath: editorFilePath,
@@ -134,13 +216,13 @@ export default function EditorPage() {
             </div>
 
             {/* Monaco */}
-            <div className="h-[500px]">
+            <div className="h-[500px] relative">
               <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading editor...</div>}>
                 <MonacoEditor
                   height="100%"
                   language={editorLanguage}
                   value={editorContent}
-                  onChange={v => setEditorContent(v ?? '')}
+                  onChange={handleEditorChange}
                   theme="vs"
                   options={{
                     fontSize: 13,
@@ -154,6 +236,30 @@ export default function EditorPage() {
                   }}
                 />
               </Suspense>
+
+              {/* Ghost text overlay */}
+              <AnimatePresence>
+                {ghostText && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 8 }}
+                    className="absolute bottom-4 right-4 max-w-sm sf-card p-3 sf-glow"
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] font-medium text-primary">Ghost Prediction</span>
+                      {ghostConfidence !== null && (
+                        <Badge variant="outline" className="text-[9px]">{Math.round(ghostConfidence * 100)}%</Badge>
+                      )}
+                    </div>
+                    <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap max-h-24 overflow-y-auto">{ghostText}</pre>
+                    <div className="flex items-center gap-2 mt-2 text-[10px] text-muted-foreground">
+                      <kbd className="px-1.5 py-0.5 rounded bg-secondary text-foreground font-mono">Tab</kbd> accept
+                      <kbd className="px-1.5 py-0.5 rounded bg-secondary text-foreground font-mono">Esc</kbd> dismiss
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
             {/* Status bar */}
