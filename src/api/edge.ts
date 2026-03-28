@@ -16,6 +16,51 @@ export async function suggestFix(params: {
   return data as { suggestion: string; patch: string; explanation: string; patchedText?: string };
 }
 
+// Build cognitive signature via AI
+export async function buildSignature(params: {
+  text?: string;
+  files?: { path: string; content: string }[];
+  options?: { language?: string };
+}) {
+  const { data, error } = await supabase.functions.invoke('signature-build', {
+    body: params,
+  });
+
+  if (error) throw new Error(error.message || 'Signature build failed');
+  return data as { signatureJson: import('@/types').CognitiveSignature; version: number; summary: string };
+}
+
+// Learn a new reflex
+export async function learnReflex(params: {
+  triggerPattern: string;
+  transformation: string;
+  examples?: string[];
+}) {
+  const { data, error } = await supabase.functions.invoke('reflex-learn', {
+    body: params,
+  });
+
+  if (error) throw new Error(error.message || 'Reflex learn failed');
+  return data as import('@/types').Reflex;
+}
+
+// Open a GitHub PR from a patch
+export async function openPR(params: {
+  patch: string;
+  repo: { owner: string; name: string };
+  branchName?: string;
+  base?: string;
+  title: string;
+  body?: string;
+}) {
+  const { data, error } = await supabase.functions.invoke('patch-pr', {
+    body: params,
+  });
+
+  if (error) throw new Error(error.message || 'PR creation failed');
+  return data as { prUrl: string | null; message?: string };
+}
+
 // Predictive SSE stream
 export function predictStream(params: {
   filePath: string;

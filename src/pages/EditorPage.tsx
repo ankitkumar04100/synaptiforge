@@ -1,11 +1,11 @@
 import { useAppStore } from '@/store/useAppStore';
 import { DiffViewer } from '@/components/DiffViewer';
 import { generateHeuristicSuggestion, applyUnifiedDiff } from '@/lib/engine';
-import { suggestFix, predictStream } from '@/api/edge';
+import { suggestFix, predictStream, learnReflex } from '@/api/edge';
 import { db } from '@/db/dexie';
 import { useState, useCallback, useRef, useEffect, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Play, FileCode, Undo2, Redo2, Copy, Check, Wand2, Loader2 } from 'lucide-react';
+import { Play, FileCode, Undo2, Redo2, Copy, Check, Wand2, Loader2, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Slider } from '@/components/ui/slider';
@@ -20,11 +20,14 @@ interface SuggestionResult {
   explanation: string;
 }
 
+const MAX_UNDO = 10;
+
 export default function EditorPage() {
   const {
     editorContent, setEditorContent, editorLanguage, setEditorLanguage,
     editorFilePath, setEditorFilePath, predictiveEnabled, setPredictiveEnabled,
-    aggressiveness, setAggressiveness, signature, provider, addPatch
+    aggressiveness, setAggressiveness, signature, provider, addPatch,
+    reflexes, addReflex,
   } = useAppStore();
 
   const [loading, setLoading] = useState(false);
@@ -34,10 +37,12 @@ export default function EditorPage() {
   const [copied, setCopied] = useState(false);
   const [ghostText, setGhostText] = useState('');
   const [ghostConfidence, setGhostConfidence] = useState<number | null>(null);
+  const [reflexMatch, setReflexMatch] = useState<{ id: string; triggerPattern: string; transformation: string } | null>(null);
   const ghostAbortRef = useRef<AbortController | null>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ghostDecayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Ghost text prediction
+  // Ghost text prediction with auto-decay
   useEffect(() => {
     if (!predictiveEnabled) {
       setGhostText('');
@@ -48,6 +53,7 @@ export default function EditorPage() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Tab' && ghostText) {
         e.preventDefault();
+        pushUndo(editorContent);
         setEditorContent(editorContent + ghostText);
         setGhostText('');
         setGhostConfidence(null);
@@ -62,6 +68,36 @@ export default function EditorPage() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [predictiveEnabled, ghostText, editorContent, setEditorContent]);
+
+  // Auto-decay ghost text after 6s
+  useEffect(() => {
+    if (ghostText) {
+      if (ghostDecayRef.current) clearTimeout(ghostDecayRef.current);
+      ghostDecayRef.current = setTimeout(() => {
+        setGhostText('');
+        setGhostConfidence(null);
+      }, 6000);
+    }
+    return () => { if (ghostDecayRef.current) clearTimeout(ghostDecayRef.current); };
+  }, [ghostText]);
+
+  // Check reflex matches on content change
+  useEffect(() => {
+    const enabledReflexes = reflexes.filter(r => r.enabled && r.confidence >= 0.6);
+    let matched = null;
+    for (const r of enabledReflexes) {
+      if (editorContent.includes(r.triggerPattern)) {
+        matched = { id: r.id, triggerPattern: r.triggerPattern, transformation: r.transformation };
+        break;
+      }
+    }
+    setReflexMatch(matched);
+  }, [editorContent, reflexes]);
+
+  const pushUndo = useCallback((content: string) => {
+    setUndoStack(prev => [...prev.slice(-MAX_UNDO + 1), content]);
+    setRedoStack([]);
+  }, []);
 
   const triggerPrediction = useCallback(() => {
     if (!predictiveEnabled) return;
@@ -116,7 +152,7 @@ export default function EditorPage() {
         intent: intentText,
       });
       setResult(res);
-      toast.success(intent === 'fix' ? 'Suggestion ready' : 'Patch generated');
+      toast.success(intent === 'fix' ? 'AI suggestion ready' : 'AI patch generated');
     } catch (err) {
       // Fallback to local heuristic
       const res = generateHeuristicSuggestion(editorContent, editorLanguage);
@@ -127,12 +163,11 @@ export default function EditorPage() {
     }
   }, [editorContent, editorLanguage, editorFilePath, signature]);
 
-  const handleApply = useCallback(() => {
+  const handleApply = useCallback(async () => {
     if (!result) return;
     const { result: newContent, success, error } = applyUnifiedDiff(editorContent, result.patch);
     if (success) {
-      setUndoStack(prev => [...prev, editorContent]);
-      setRedoStack([]);
+      pushUndo(editorContent);
       setEditorContent(newContent);
       const patch = {
         id: `patch-${Date.now()}`,
@@ -143,12 +178,24 @@ export default function EditorPage() {
         createdAt: new Date().toISOString(),
       };
       addPatch(patch);
-      db.patches.put(patch);
+      await db.patches.put(patch);
       toast.success('Patch applied');
+
+      // Try to learn a reflex from this acceptance
+      try {
+        const triggerPattern = result.suggestion.slice(0, 40);
+        const res = await learnReflex({
+          triggerPattern,
+          transformation: result.explanation.slice(0, 100),
+          examples: [editorFilePath],
+        });
+        addReflex(res);
+        await db.reflexes.put(res);
+      } catch { /* reflex learning is best-effort */ }
     } else {
       toast.error(`Failed to apply: ${error}`);
     }
-  }, [result, editorContent, editorFilePath, setEditorContent, addPatch]);
+  }, [result, editorContent, editorFilePath, setEditorContent, addPatch, addReflex, pushUndo]);
 
   const handleUndo = useCallback(() => {
     if (undoStack.length === 0) return;
@@ -176,14 +223,52 @@ export default function EditorPage() {
     toast.success('Copied');
   }, [result]);
 
+  // Ctrl/Cmd+Enter shortcut
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        handleSuggest('fix');
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [handleSuggest]);
+
   const langOptions = [
     { value: 'python', label: 'Python' },
     { value: 'typescript', label: 'TypeScript' },
     { value: 'javascript', label: 'JavaScript' },
   ];
 
+  const confidenceLabel = ghostConfidence !== null
+    ? ghostConfidence >= 0.8 ? 'High' : ghostConfidence >= 0.5 ? 'Med' : 'Low'
+    : null;
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+      {/* Reflex suggestion banner */}
+      <AnimatePresence>
+        {reflexMatch && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="mb-4 sf-card sf-glow p-3 flex items-center justify-between"
+          >
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-primary" />
+              <span className="text-xs font-medium text-foreground">Reflex: {reflexMatch.transformation}</span>
+              <Badge variant="outline" className="text-[10px] border-primary/30 text-primary">Auto-detected</Badge>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" className="text-[10px] rounded-lg h-6 px-2"
+                onClick={() => setReflexMatch(null)}>Ignore</Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="flex flex-col lg:flex-row gap-4">
         {/* Editor */}
         <div className="flex-1 min-w-0">
@@ -205,6 +290,7 @@ export default function EditorPage() {
                 {langOptions.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
               </select>
               <div className="flex-1" />
+              <span className="text-[10px] text-muted-foreground hidden sm:inline">⌘+Enter: Suggest</span>
               <Button variant="outline" size="sm" className="rounded-xl text-xs gap-1" onClick={() => handleSuggest('fix')} disabled={loading}>
                 {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
                 Suggest Fix
@@ -248,8 +334,17 @@ export default function EditorPage() {
                   >
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="text-[10px] font-medium text-primary">Ghost Prediction</span>
-                      {ghostConfidence !== null && (
-                        <Badge variant="outline" className="text-[9px]">{Math.round(ghostConfidence * 100)}%</Badge>
+                      {confidenceLabel && (
+                        <Badge
+                          variant="outline"
+                          className={`text-[9px] ${
+                            confidenceLabel === 'High' ? 'border-success/30 text-success'
+                            : confidenceLabel === 'Med' ? 'border-warning/30 text-warning'
+                            : 'border-muted-foreground/30'
+                          }`}
+                        >
+                          {confidenceLabel} {ghostConfidence !== null ? `${Math.round(ghostConfidence * 100)}%` : ''}
+                        </Badge>
                       )}
                     </div>
                     <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap max-h-24 overflow-y-auto">{ghostText}</pre>

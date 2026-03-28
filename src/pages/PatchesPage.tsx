@@ -2,16 +2,20 @@ import { useAppStore } from '@/store/useAppStore';
 import { db } from '@/db/dexie';
 import { DiffViewer } from '@/components/DiffViewer';
 import { applyUnifiedDiff } from '@/lib/engine';
+import { openPR } from '@/api/edge';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FileCode, Play, ExternalLink, ChevronDown } from 'lucide-react';
+import { FileCode, Play, ExternalLink, ChevronDown, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
 export default function PatchesPage() {
   const { patches, updatePatchStatus, editorContent, setEditorContent } = useAppStore();
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [prLoading, setPrLoading] = useState<string | null>(null);
+  const [prRepo, setPrRepo] = useState({ owner: '', name: '' });
 
   const handleApply = async (patchId: string) => {
     const patch = patches.find(p => p.id === patchId);
@@ -28,8 +32,37 @@ export default function PatchesPage() {
   };
 
   const handleOpenPR = async (patchId: string) => {
-    // In a real implementation, this would call the backend
-    toast('GitHub token not configured — apply locally instead', { description: 'Set GITHUB_TOKEN to enable PR creation' });
+    const patch = patches.find(p => p.id === patchId);
+    if (!patch) return;
+
+    if (!prRepo.owner || !prRepo.name) {
+      toast.error('Enter repo owner and name first');
+      return;
+    }
+
+    setPrLoading(patchId);
+    try {
+      const res = await openPR({
+        patch: patch.diff,
+        repo: prRepo,
+        title: `Synaptiforge: ${patch.explanation.slice(0, 60)}`,
+        body: `Auto-generated patch by Synaptiforge.\n\n**Explanation:** ${patch.explanation}\n\n\`\`\`diff\n${patch.diff}\n\`\`\``,
+      });
+
+      if (res.prUrl) {
+        updatePatchStatus(patchId, 'pr_opened', res.prUrl);
+        await db.patches.update(patchId, { status: 'pr_opened', prUrl: res.prUrl });
+        toast.success('PR created!', { description: res.prUrl });
+      } else {
+        toast(res.message || 'PR creation unavailable', {
+          description: 'Add GITHUB_TOKEN to project secrets to enable PR creation.',
+        });
+      }
+    } catch (err) {
+      toast.error('Failed to create PR');
+    } finally {
+      setPrLoading(null);
+    }
   };
 
   const statusColor = (status: string) => {
@@ -45,6 +78,28 @@ export default function PatchesPage() {
       <div>
         <h1 className="font-display text-2xl font-bold text-foreground">Patches</h1>
         <p className="text-sm text-muted-foreground mt-0.5">Manage generated and applied patches</p>
+      </div>
+
+      {/* PR repo config */}
+      <div className="sf-card p-4">
+        <div className="text-xs font-medium text-foreground mb-2">GitHub Repository (for PR creation)</div>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            placeholder="owner"
+            value={prRepo.owner}
+            onChange={e => setPrRepo(r => ({ ...r, owner: e.target.value }))}
+            className="text-xs font-mono px-2 py-1.5 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring/30 w-32"
+          />
+          <span className="text-muted-foreground text-xs">/</span>
+          <input
+            type="text"
+            placeholder="repo"
+            value={prRepo.name}
+            onChange={e => setPrRepo(r => ({ ...r, name: e.target.value }))}
+            className="text-xs font-mono px-2 py-1.5 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring/30 w-32"
+          />
+        </div>
       </div>
 
       <div className="space-y-3">
@@ -90,9 +145,23 @@ export default function PatchesPage() {
                           <Button size="sm" className="rounded-xl text-xs gap-1 sf-primary-grad border-0" onClick={() => handleApply(p.id)}>
                             <Play className="w-3 h-3" /> Apply Locally
                           </Button>
-                          <Button variant="outline" size="sm" className="rounded-xl text-xs gap-1" onClick={() => handleOpenPR(p.id)}>
-                            <ExternalLink className="w-3 h-3" /> Open PR
-                          </Button>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="rounded-xl text-xs gap-1"
+                                onClick={() => handleOpenPR(p.id)}
+                                disabled={prLoading === p.id}
+                              >
+                                {prLoading === p.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <ExternalLink className="w-3 h-3" />}
+                                Open PR
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="text-xs">Creates a GitHub PR. Requires GITHUB_TOKEN in project secrets.</p>
+                            </TooltipContent>
+                          </Tooltip>
                         </>
                       )}
                       {p.prUrl && (
