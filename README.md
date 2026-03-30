@@ -10,16 +10,6 @@
 
 ---
 
-## 🚀 Elevator Tagline
-
-**Synaptiforge** is an adaptive AI that studies your coding style, learns your logical patterns, and evolves to generate code that reflects your thinking—turning development into a **deeply personalized experience**.
-
----
-
-<img width="2528" height="1696" alt="Gemini_Generated_Image_plejlvplejlvplej" src="https://github.com/user-attachments/assets/e29d6fe7-46e3-491b-b2aa-5842160aa480" />
-
----
-
 ## 📚 Table of Contents
 
 - [🌟 Why Synaptiforge?](#-why-synaptiforge)
