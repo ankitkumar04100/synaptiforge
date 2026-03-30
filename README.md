@@ -4,7 +4,7 @@
 
 ---
 
-**[Synaptiforge App](https://synaptiforge.vercel.app/)**
+**[Synaptiforge App](https://synaptiforge.lovable.app)**
 
 ---
 
