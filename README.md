@@ -1,5 +1,7 @@
 # 🧠 Synaptiforge — Your Cognitive Coding Twin
 
+<img width="2528" height="1696" alt="Gemini_Generated_Image_plejlvplejlvplej" src="https://github.com/user-attachments/assets/69054412-06d0-4a76-ae1a-83ee64438bb9" />
+
 > A self-evolving AI that learns your coding patterns, predicts your next move, and generates code in your personal style.
 
 ---
